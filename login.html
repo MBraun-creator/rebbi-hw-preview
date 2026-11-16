@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Teacher Login | Rebbi Homework Portal</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f1f5fa;color:#17324e;font:16px system-ui,-apple-system,sans-serif;padding:20px}main{width:min(100%,420px);background:white;border:1px solid #dce4ed;border-radius:16px;padding:32px;box-shadow:0 12px 36px #18334a12}h1{margin:0 0 8px;font-size:1.65rem}p{color:#586b7d;line-height:1.5}label{display:block;margin:18px 0 6px;font-weight:650}input{width:100%;padding:13px;border:1px solid #acbccc;border-radius:9px;font:inherit}button{width:100%;margin-top:22px;padding:13px;background:#173f6a;color:white;border:0;border-radius:9px;font:inherit;font-weight:700;cursor:pointer}button:disabled{opacity:.6;cursor:wait}.status{min-height:25px;margin-top:15px}a{color:#1d4e81}.small{font-size:.85rem}#signedIn{display:none}#setup{display:none;background:#fff1d5;border-radius:8px;padding:12px}
+</style></head><body><main>
+<div id="login"><h1>Teacher Login</h1><p>Rebbi Homework Portal</p>
+<div id="setup">This preview needs the public Supabase project URL and publishable key configured in <code>config.js</code>. Never use a secret or service-role key.</div>
+<form id="form"><label for="email">Teacher email</label><input id="email" type="email" autocomplete="username" required>
+<label for="password">Password</label><input id="password" type="password" autocomplete="current-password" required>
+<button id="submit" type="submit">Sign in</button></form><div id="message" class="status" role="status" aria-live="polite"></div>
+<p class="small">Only approved teacher accounts can enter. Do not test with student information.</p></div>
+<div id="signedIn"><h1>Teacher access verified</h1><p id="welcome"></p><p>The teacher dashboard is not connected yet. Authentication is now working.</p><button id="signout">Sign out</button></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="./config.js"></script>
+<script>
+(function(){
+const cfg=window.HOMEWORK_CONFIG||{}, setup=document.getElementById('setup'), form=document.getElementById('form'),message=document.getElementById('message'),btn=document.getElementById('submit');
+if(!cfg.supabaseUrl||!cfg.supabasePublishableKey||!window.supabase){setup.style.display='block';form.style.display='none';return;}
+const client=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey);
+function showSignedIn(email){document.getElementById('login').style.display='none';document.getElementById('signedIn').style.display='block';document.getElementById('welcome').textContent='Signed in as '+email;}
+async function verify(user){if(!user)return false;const {data,error}=await client.from('teacher_accounts').select('user_id').eq('user_id',user.id).maybeSingle();if(error)throw error;return !!data;}
+async function check(){const {data,error}=await client.auth.getUser();if(error||!data.user)return;try{if(await verify(data.user))showSignedIn(data.user.email||'teacher');else {await client.auth.signOut();message.textContent='This account is not authorized as a teacher.';}}catch(e){message.textContent='Unable to verify teacher access. Please try again.';}}
+form.addEventListener('submit',async e=>{e.preventDefault();btn.disabled=true;message.textContent='Signing in…';try{const {data,error}=await client.auth.signInWithPassword({email:document.getElementById('email').value.trim(),password:document.getElementById('password').value});if(error)throw error;if(!await verify(data.user)){await client.auth.signOut();message.textContent='This account is not authorized as a teacher.';return;}document.getElementById('password').value='';showSignedIn(data.user.email||'teacher');}catch(e){message.textContent='Sign-in failed or access could not be verified. Check your credentials and connection.';}finally{btn.disabled=false;}});
+document.getElementById('signout').addEventListener('click',async()=>{await client.auth.signOut();location.reload();});
+check();
+})();
+</script></body></html>
