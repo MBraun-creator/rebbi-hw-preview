@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Student Roster | Rebbi Homework Portal</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f2f5fa;color:#18324f;font:16px system-ui,-apple-system,sans-serif}header{background:#142f4e;color:white;padding:22px max(20px,calc((100vw - 960px)/2))}header h1{margin:0;font-size:1.55rem}header p{margin:6px 0 0;color:#cbd9e8}main{max-width:960px;margin:auto;padding:22px 16px}.card{background:white;border:1px solid #dce5ef;border-radius:14px;padding:22px;margin-bottom:16px}h2{margin:0 0 14px;font-size:1.22rem}.row{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.field{flex:1;min-width:180px}label{display:block;font-weight:650;margin:0 0 7px}input,select{width:100%;font:inherit;padding:11px;border:1px solid #b7c7d8;border-radius:8px}button,.link{font:inherit;font-weight:650;padding:11px 15px;background:#173f6a;color:white;border:0;border-radius:8px;cursor:pointer;text-decoration:none;display:inline-block}button.secondary,.link.secondary{background:#e9eef5;color:#18324f}button:disabled{opacity:.55;cursor:wait}.muted{color:#5d6c7e}.notice{padding:12px 15px;border-radius:9px;background:#fff3d9;margin-bottom:18px}.status{min-height:23px;margin:12px 0;color:#9b3030}.status.ok{color:#17613a}.tablewrap{overflow-x:auto}table{border-collapse:collapse;width:100%;text-align:left}th,td{padding:12px 8px;border-bottom:1px solid #e6ecf3}th{color:#53667a;font-size:.87rem}td button{padding:7px 12px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px}#app{display:none}#editor{display:none;border-top:1px solid #e2e8f0;padding-top:18px;margin-top:18px}.small{font-size:.86rem}#gate{text-align:center;padding:48px 16px}@media(max-width:580px){.card{padding:16px}.top{align-items:start;flex-direction:column}}
+</style></head><body><header><h1>Rebbi Homework Portal</h1><p>Teacher dashboard · Student management</p></header>
+<main><div class="notice"><strong>Testing stage:</strong> Use fictional students only. Student sign-in and PINs are not enabled yet.</div>
+<div id="gate" class="card"><h2>Checking teacher access…</h2><p id="gateMsg" class="muted">Please wait.</p><a class="link" href="./login.html">Teacher login</a></div>
+<div id="app">
+<div class="top"><h2>Student roster</h2><div class="row"><span id="teacherEmail" class="muted small"></span><button id="logout" class="secondary">Sign out</button></div></div>
+<section class="card"><h2>School year</h2><div class="row"><div class="field"><label for="year">Select school year</label><select id="year"><option value="">Loading…</option></select></div><button id="refresh" class="secondary">Refresh</button></div><form id="yearForm" class="row" style="margin-top:18px"><div class="field"><label for="newYear">Create a school year</label><input id="newYear" maxlength="80" placeholder="e.g. 2026–2027" required></div><button type="submit">Create year</button></form><p id="yearStatus" class="status" role="status"></p></section>
+<section class="card"><h2>Add a student</h2><form id="addForm"><div class="row"><div class="field"><label for="first">First name</label><input id="first" maxlength="100" required></div><div class="field"><label for="last">Last name</label><input id="last" maxlength="100" required></div><div class="field"><label for="username">Username</label><input id="username" maxlength="40" pattern="[a-z0-9][a-z0-9._-]{2,39}" placeholder="e.g. test.student1" required></div><button id="addBtn" type="submit">Add student</button></div></form><p class="muted small">Usernames must be unique, at least 3 characters, and use lowercase letters, numbers, dots, underscores or hyphens. These entries do not create login accounts.</p><p id="addStatus" class="status" role="status"></p></section>
+<section class="card"><div class="top"><h2>Students <span id="count" class="muted"></span></h2><span class="muted small">Alphabetical by last name</span></div><p id="listStatus" class="status" role="status"></p><div class="tablewrap"><table><thead><tr><th>Last name</th><th>First name</th><th>Username</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+<div id="editor"><h2>Edit student</h2><form id="editForm"><div class="row"><div class="field"><label for="editFirst">First name</label><input id="editFirst" maxlength="100" required></div><div class="field"><label for="editLast">Last name</label><input id="editLast" maxlength="100" required></div><div class="field"><label for="editUsername">Username</label><input id="editUsername" maxlength="40" pattern="[a-z0-9][a-z0-9._-]{2,39}" required></div></div><div class="row" style="margin-top:14px"><button type="submit">Save changes</button><button type="button" class="secondary" id="cancelEdit">Cancel</button></div></form><p id="editStatus" class="status" role="status"></p></div></section>
+</div></main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script><script src="./config.js"></script>
+<script>
+(async function(){
+'use strict';
+const $=id=>document.getElementById(id),cfg=window.HOMEWORK_CONFIG||{};
+if(!window.supabase||!cfg.supabaseUrl||!cfg.supabasePublishableKey){$('gateMsg').textContent='Website configuration unavailable.';return;}
+const db=window.supabase.createClient(cfg.supabaseUrl,cfg.supabasePublishableKey);
+let selectedYear='',students=[],editingId='';
+function status(id,msg,ok=false){$(id).textContent=msg;$(id).classList.toggle('ok',ok);}
+function errorMessage(e){return e&&e.message?e.message:'Unexpected error. Please try again.';}
+try{
+const {data:auth,error:authError}=await db.auth.getUser();
+if(authError||!auth.user){$('gateMsg').textContent='Please sign in as a teacher first.';return;}
+const {data:teacher,error:teacherError}=await db.from('teacher_accounts').select('user_id').eq('user_id',auth.user.id).maybeSingle();
+if(teacherError||!teacher){$('gateMsg').textContent='Your account is not authorized for teacher access.';return;}
+$('teacherEmail').textContent=auth.user.email||'Teacher';$('gate').style.display='none';$('app').style.display='block';
+}catch(e){$('gateMsg').textContent='Could not verify access: '+errorMessage(e);return;}
+$('logout').onclick=async()=>{await db.auth.signOut();location.href='./login.html';};
+async function loadYears(prefer){
+status('yearStatus','');const {data,error}=await db.from('school_years').select('id,label,archived_at').order('label',{ascending:false});
+if(error){status('yearStatus',errorMessage(error));return;}
+const sel=$('year');sel.replaceChildren();
+const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Select a school year';sel.append(placeholder);
+for(const year of data){const opt=document.createElement('option');opt.value=year.id;opt.textContent=year.label+(year.archived_at?' (archived)':'');sel.append(opt);}
+const ids=data.map(x=>x.id);selectedYear=ids.includes(prefer)?prefer:ids.includes(selectedYear)?selectedYear:ids[0]||'';sel.value=selectedYear;await loadStudents();
+}
+async function loadStudents(){
+selectedYear=$('year').value;students=[];editingId='';$('editor').style.display='none';$('rows').replaceChildren();$('count').textContent='';status('listStatus','');
+$('addBtn').disabled=!selectedYear;
+if(!selectedYear){status('listStatus','Create or select a school year to begin.');return;}
+const {data,error}=await db.from('students').select('id,first_name,last_name,username,archived_at').eq('school_year_id',selectedYear).is('archived_at',null).order('last_name').order('first_name');
+if(error){status('listStatus',errorMessage(error));return;}
+students=data||[];$('count').textContent='('+students.length+')';
+if(!students.length){status('listStatus','No students yet. Add a fictional test student above.',true);return;}
+for(const student of students){
+const tr=document.createElement('tr');
+for(const key of ['last_name','first_name','username']){const td=document.createElement('td');td.textContent=student[key];tr.append(td);}
+const td=document.createElement('td'),button=document.createElement('button');button.className='secondary';button.textContent='Edit';button.onclick=()=>editStudent(student.id);td.append(button);tr.append(td);$('rows').append(tr);
+}}
+function editStudent(id){const s=students.find(x=>x.id===id);if(!s)return;editingId=id;$('editFirst').value=s.first_name;$('editLast').value=s.last_name;$('editUsername').value=s.username;$('editor').style.display='block';status('editStatus','');$('editor').scrollIntoView({behavior:'smooth',block:'nearest'});}
+$('cancelEdit').onclick=()=>{$('editor').style.display='none';editingId='';};
+$('year').onchange=loadStudents;$('refresh').onclick=()=>loadYears(selectedYear);
+$('yearForm').onsubmit=async e=>{e.preventDefault();const label=$('newYear').value.trim();if(!label)return;status('yearStatus','Saving…');const {data,error}=await db.from('school_years').insert({label}).select('id').single();if(error){status('yearStatus',errorMessage(error));return;}$('newYear').value='';await loadYears(data.id);status('yearStatus','School year created.',true);};
+$('addForm').onsubmit=async e=>{e.preventDefault();if(!selectedYear){status('addStatus','Select a school year first.');return;}
+const payload={school_year_id:selectedYear,first_name:$('first').value.trim(),last_name:$('last').value.trim(),username:$('username').value.trim()};
+if(!payload.first_name||!payload.last_name)return;
+$('addBtn').disabled=true;status('addStatus','Saving…');
+const {error}=await db.from('students').insert(payload);
+$('addBtn').disabled=false;if(error){status('addStatus',errorMessage(error));return;}
+$('addForm').reset();await loadStudents();status('addStatus','Student added.',true);
+};
+$('editForm').onsubmit=async e=>{e.preventDefault();if(!editingId)return;const payload={first_name:$('editFirst').value.trim(),last_name:$('editLast').value.trim(),username:$('editUsername').value.trim()};
+status('editStatus','Saving…');const {error}=await db.from('students').update(payload).eq('id',editingId).eq('school_year_id',selectedYear);
+if(error){status('editStatus',errorMessage(error));return;}await loadStudents();status('listStatus','Student updated.',true);
+};
+await loadYears();
+})();
+</script></body></html>
