@@ -9,6 +9,9 @@
 <div class="top"><h2>Student roster</h2><div class="row"><span id="teacherEmail" class="muted small"></span><button id="logout" class="secondary">Sign out</button></div></div>
 <section class="card"><h2>School year</h2><div class="row"><div class="field"><label for="year">Select school year</label><select id="year"><option value="">Loading…</option></select></div><button id="refresh" class="secondary">Refresh</button></div><form id="yearForm" class="row" style="margin-top:18px"><div class="field"><label for="newYear">Create a school year</label><input id="newYear" maxlength="80" placeholder="e.g. 2026–2027" required></div><button type="submit">Create year</button></form><p id="yearStatus" class="status" role="status"></p></section>
 <section class="card"><h2>Add a student</h2><form id="addForm"><div class="row"><div class="field"><label for="first">First name</label><input id="first" maxlength="100" required></div><div class="field"><label for="last">Last name</label><input id="last" maxlength="100" required></div><div class="field"><label for="username">Username</label><input id="username" maxlength="40" pattern="[a-z0-9][a-z0-9._-]{2,39}" placeholder="e.g. test.student1" required></div><button id="addBtn" type="submit">Add student</button></div></form><p class="muted small">Usernames must be unique, at least 3 characters, and use lowercase letters, numbers, dots, underscores or hyphens. These entries do not create login accounts.</p><p id="addStatus" class="status" role="status"></p></section>
+<section class="card"><h2>Import students from CSV</h2><p class="muted small">Select a CSV with <code>first_name,last_name</code> columns (or <code>First Name,Last Name</code>). Preview the students before importing. Fictional names only during testing.</p>
+<div class="row"><div class="field"><label for="csvFile">Choose CSV file</label><input id="csvFile" type="file" accept=".csv,text/csv"></div><button id="importBtn" disabled>Import 0 students</button></div>
+<p id="csvStatus" class="status" role="status"></p><div id="csvPreview" style="display:none"><h3>Import preview</h3><p id="csvSummary" class="muted small"></p><div class="tablewrap"><table><thead><tr><th>First name</th><th>Last name</th><th>Generated username</th></tr></thead><tbody id="csvRows"></tbody></table></div></div></section>
 <section class="card"><div class="top"><h2>Students <span id="count" class="muted"></span></h2><span class="muted small">Alphabetical by last name</span></div><p id="listStatus" class="status" role="status"></p><div class="tablewrap"><table><thead><tr><th>Last name</th><th>First name</th><th>Username</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
 <div id="editor"><h2>Edit student</h2><form id="editForm"><div class="row"><div class="field"><label for="editFirst">First name</label><input id="editFirst" maxlength="100" required></div><div class="field"><label for="editLast">Last name</label><input id="editLast" maxlength="100" required></div><div class="field"><label for="editUsername">Username</label><input id="editUsername" maxlength="40" pattern="[a-z0-9][a-z0-9._-]{2,39}" required></div></div><div class="row" style="margin-top:14px"><button type="submit">Save changes</button><button type="button" class="secondary" id="cancelEdit">Cancel</button></div></form><p id="editStatus" class="status" role="status"></p></div></section>
 </div></main>
@@ -67,6 +70,82 @@ $('editForm').onsubmit=async e=>{e.preventDefault();if(!editingId)return;const p
 status('editStatus','Saving…');const {error}=await db.from('students').update(payload).eq('id',editingId).eq('school_year_id',selectedYear);
 if(error){status('editStatus',errorMessage(error));return;}await loadStudents();status('listStatus','Student updated.',true);
 };
+
+let pendingImport=[];
+function parseCSV(raw){
+  const rows=[];let row=[],field='',quoted=false;
+  raw=raw.replace(/^\uFEFF/,'');
+  for(let i=0;i<raw.length;i++){
+    const c=raw[i];
+    if(quoted){if(c==='"'&&raw[i+1]==='"'){field+='"';i++;}else if(c==='"'){quoted=false;}else field+=c;}
+    else if(c==='"'){quoted=true;}
+    else if(c===','){row.push(field);field='';}
+    else if(c==='\n'||c==='\r'){if(c==='\r'&&raw[i+1]==='\n')i++;row.push(field);if(row.some(v=>v.trim()))rows.push(row);row=[];field='';}
+    else field+=c;
+  }
+  if(quoted)throw Error('CSV contains an unclosed quotation mark.');
+  row.push(field);if(row.some(v=>v.trim()))rows.push(row);
+  return rows;
+}
+function slug(s){return s.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'.').replace(/^\.+|\.+$/g,'');}
+function importUsername(first,last,used){
+  let base=(slug(first)+'.'+slug(last)).replace(/^\.+|\.+$/g,'').slice(0,34);
+  if(base.length<3)base='student.'+(base||'test');
+  let name=base,n=2;
+  while(used.has(name)){const suffix='.'+n++;name=base.slice(0,40-suffix.length)+suffix;}
+  used.add(name);return name;
+}
+function resetCSV(msg=''){
+  pendingImport=[];$('importBtn').disabled=true;$('importBtn').textContent='Import 0 students';
+  $('csvPreview').style.display='none';$('csvRows').replaceChildren();status('csvStatus',msg);
+}
+$('csvFile').addEventListener('change',async()=>{
+  resetCSV();
+  const file=$('csvFile').files[0];if(!file)return;
+  if(!selectedYear){status('csvStatus','Select or create a school year first.');return;}
+  try{
+    if(file.size>1024*1024)throw Error('CSV file is too large (maximum 1 MB).');
+    const data=parseCSV(await file.text());
+    if(data.length<2)throw Error('CSV needs a header row and at least one student.');
+    const normalize=s=>s.trim().toLowerCase().replace(/[\s_-]+/g,'');
+    const header=data[0].map(normalize),firstCol=header.indexOf('firstname'),lastCol=header.indexOf('lastname');
+    if(firstCol<0||lastCol<0)throw Error('CSV must contain first_name and last_name columns.');
+    if(data.length>501)throw Error('Import up to 500 students at a time.');
+    const used=new Set(students.map(s=>s.username));
+    const entries=[];
+    for(let i=1;i<data.length;i++){
+      const first=(data[i][firstCol]||'').trim(),last=(data[i][lastCol]||'').trim();
+      if(!first&&!last)continue;
+      if(!first||!last||first.length>100||last.length>100)throw Error('Invalid first or last name on CSV row '+(i+1)+'.');
+      entries.push({first_name:first,last_name:last,username:importUsername(first,last,used)});
+    }
+    if(!entries.length)throw Error('No student names found.');
+    pendingImport=entries;
+    for(const item of entries){const tr=document.createElement('tr');for(const value of [item.first_name,item.last_name,item.username]){const td=document.createElement('td');td.textContent=value;tr.append(td);}$('csvRows').append(tr);}
+    $('csvPreview').style.display='block';$('csvSummary').textContent=entries.length+' students will be added to the selected school year. Check the names and usernames below.';
+    $('importBtn').disabled=false;$('importBtn').textContent='Import '+entries.length+' students';
+    status('csvStatus','Preview ready. No records have been saved yet.',true);
+  }catch(e){resetCSV(errorMessage(e));}
+});
+$('importBtn').onclick=async()=>{
+  if(!pendingImport.length||!selectedYear)return;
+  const yearAtPreview=selectedYear;
+  if(!confirm('Import '+pendingImport.length+' students into the selected school year?'))return;
+  $('importBtn').disabled=true;
+  let inserted=0;
+  for(const item of pendingImport){
+    if(selectedYear!==yearAtPreview){status('csvStatus','School year changed. Import stopped after '+inserted+' students.');break;}
+    const {error}=await db.from('students').insert({...item,school_year_id:yearAtPreview});
+    if(error){status('csvStatus','Stopped after '+inserted+' students: '+errorMessage(error));break;}
+    inserted++;
+    status('csvStatus','Imported '+inserted+' of '+pendingImport.length+' students…',true);
+  }
+  const allDone=inserted===pendingImport.length;
+  if(allDone){$('csvFile').value='';resetCSV();status('csvStatus','Successfully imported '+inserted+' students.',true);}
+  else{$('importBtn').disabled=true;$('csvSummary').textContent='Partial import: '+inserted+' students were saved. Refresh the roster and choose the file again only after checking for duplicates.';}
+  await loadStudents();
+};
+
 await loadYears();
 })();
 </script></body></html>
